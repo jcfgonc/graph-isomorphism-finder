@@ -1,20 +1,15 @@
 package org.jcfgonc.graphisomorphism;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.BitSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.IntStream;
 
 import com.githhub.aaronbembenek.querykb.Conjunct;
 import com.githhub.aaronbembenek.querykb.KnowledgeBase;
-import com.githhub.aaronbembenek.querykb.KnowledgeBase.KnowledgeBaseBuilder;
-import com.githhub.aaronbembenek.querykb.Query;
+import com.githhub.aaronbembenek.querykb.KnowledgeBaseBuilder;
 
 import frames.FrameReadWrite;
 import frames.SemanticFrame;
@@ -23,20 +18,12 @@ import graph.StringEdge;
 import graph.StringGraph;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import structures.MapOfList;
+import utils.JatalogInterface;
+import utils.VariousUtils;
+import za.co.wstoop.jatalog.DatalogException;
+import za.co.wstoop.jatalog.Expr;
 
 public class IsomorphismFinderLauncher {
-	public static HashMap<String, String> createConceptToVariableMapping(StringGraph pattern) {
-		Set<String> vertexSet = pattern.getVertexSet();
-		HashMap<String, String> conceptToVariable = new HashMap<>(vertexSet.size() * 2);
-		int varCounter = 0;
-		for (String concept : vertexSet) {
-			String varName = "X" + varCounter;
-			conceptToVariable.put(concept, varName);
-			varCounter++;
-		}
-		return conceptToVariable;
-	}
-
 	/**
 	 * creates a querykb conjunction to be used as a query using the given variable<=>variable mapping
 	 * 
@@ -79,50 +66,68 @@ public class IsomorphismFinderLauncher {
 		return kb;
 	}
 
-	public static void main(String[] args) throws IOException, InterruptedException {
+	public static void main(String[] args) {
 		// read graphs
-		String framesPath = "../PatternMiner/results/resultsV22.csv";
-		ArrayList<SemanticFrame> frames = FrameReadWrite.readPatternFrames(framesPath);
+		String framesFilename = "../PatternMiner/results/resultsV22.csv";
+		ArrayList<SemanticFrame> frames = null;
+		try {
+			frames = FrameReadWrite.readPatternFrames(framesFilename);
+		} catch (IOException | InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+		int numFrames = frames.size();
 
-		// MapOfList<Integer, StringGraph> graphsPerVertices = new MapOfList<>();
-		MapOfList<Object2IntOpenHashMap<String>, StringGraph> graphGroups = new MapOfList<Object2IntOpenHashMap<String>, StringGraph>();
-
+		// map histograms to list of graph's indices
+		MapOfList<Object2IntOpenHashMap<String>, Integer> graphGroups = new MapOfList<Object2IntOpenHashMap<String>, Integer>();
+		ArrayList<StringGraph> graphs = new ArrayList<StringGraph>(numFrames);
 		// organize graphs in groups according to the relations' histograms
-		for (SemanticFrame frame : frames) {
-			StringGraph graph = frame.getGraph();
+		// store graphs in the arraylist
+		for (int i = 0; i < numFrames; i++) {
+			SemanticFrame frame = frames.get(i);
+			StringGraph graph = frame.getFrame();
 			Object2IntOpenHashMap<String> relations = GraphAlgorithms.countRelations(graph);
-			graphGroups.add(relations, graph);
+			graphGroups.add(relations, i);
+			graphs.add(graph);
 		}
 
 		// print groups
-//		for (Object2IntOpenHashMap<String> group : graphGroups.keySet()) {
-//			List<StringGraph> list = graphGroups.get(group);
-//			System.out.println(list.size() + "\t" + group);
+//		Iterator<Entry<Object2IntOpenHashMap<String>, List<Integer>>> iterator = graphGroups.entrySet().iterator();
+//		while (iterator.hasNext()) {
+//			Entry<Object2IntOpenHashMap<String>, List<Integer>> next = iterator.next();
+//			System.out.printf("%s\t%s\n", next.getKey(), next.getValue().size());
 //		}
-//
-//		System.exit(0);
 
 		// check for isomorphisms within groups
-		HashSet<StringGraph> duplicatedGraphs = new HashSet<StringGraph>();
-		Set<Object2IntOpenHashMap<String>> keySet = graphGroups.keySet();
-		for (Object2IntOpenHashMap<String> key : keySet) {
-			List<StringGraph> localGroup = graphGroups.get(key);
-			// System.out.printf("%s\t%d\n", key, localGroup.size());
-			duplicatedGraphs.addAll(findIsomorphisms(localGroup));
+		BitSet isomorphicGraphs = new BitSet(frames.size());// list of repeated (isomorphic to some) graphs
+		try {
+			Set<Object2IntOpenHashMap<String>> keySet = graphGroups.keySet();
+			for (Object2IntOpenHashMap<String> key : keySet) {
+				List<Integer> localGroup = graphGroups.get(key);
+				findIsomorphismsInGroup(graphs, localGroup, isomorphicGraphs);
+			}
+		} catch (DatalogException e) {
+			e.printStackTrace();
+			System.exit(-2);
 		}
 
-		System.out.printf("got %d duplicated graphs \n", duplicatedGraphs.size());
+		System.out.printf("found %d duplicated graphs \n", isomorphicGraphs.cardinality());
 
-		ArrayList<SemanticFrame> uniqueFrames = new ArrayList<SemanticFrame>(frames.size());
-		for (SemanticFrame frame : frames) {
-			StringGraph graph = frame.getGraph();
-			if (duplicatedGraphs.contains(graph))
+		ArrayList<SemanticFrame> uniqueFrames = new ArrayList<SemanticFrame>(numFrames);
+		for (int i = 0; i < numFrames; i++) {
+			SemanticFrame frame = frames.get(i);
+			if (isomorphicGraphs.get(i))
 				continue;
 			uniqueFrames.add(frame);
 		}
-
 		System.out.printf("%d unique frames \n", uniqueFrames.size());
-	//	FrameReadWrite.writePatternFramesCSV(uniqueFrames, "../PatternMiner/results/resultsV22.csv");
+
+		try {
+			String outFilename = VariousUtils.appendSuffixToFilename(framesFilename, "_noiso");
+			FrameReadWrite.writePatternFramesCSV(uniqueFrames, outFilename);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 		System.lineSeparator();
 	}
 
@@ -131,40 +136,46 @@ public class IsomorphismFinderLauncher {
 	 * 
 	 * @param graphs
 	 * @return
+	 * @throws DatalogException
 	 */
-	private static Set<StringGraph> findIsomorphisms(List<StringGraph> graphs) {
-		// repeated (isomorphic to some) graphs
-		Set<StringGraph> repeatedGraphs = Collections.newSetFromMap(new ConcurrentHashMap<StringGraph, Boolean>());
-		if (graphs.size() > 1) {
-			// parallelize bigger (outer) for
-			IntStream.range(0, graphs.size() - 1).parallel().forEach(i -> {
-				StringGraph graph0 = graphs.get(i);
-				if (!repeatedGraphs.contains(graph0)) {
-					KnowledgeBase kb = buildKnowledgeBase(graph0);
-					for (int j = i + 1; j < graphs.size(); j++) {
+	private static void findIsomorphismsInGroup(ArrayList<StringGraph> graphs, List<Integer> localGroup, BitSet isomorphicGraphs)
+			throws DatalogException {
+		if (localGroup.size() > 1) {
+			// one jatalog for each thread
+			JatalogInterface jatai = new JatalogInterface();
+			// generate combinations of two elements
+			for (int i = 0; i < localGroup.size() - 1; i++) {
+
+				int index_i = localGroup.get(i).intValue();
+				StringGraph graph_i = graphs.get(index_i);
+				boolean duplicated_i = isomorphicGraphs.get(index_i);
+				if (!duplicated_i) {
+
+					StringGraph graphGrounded = GraphAlgorithms.convertGraphToConstantGraph(graph_i);
+					jatai.addFacts(graphGrounded);
+
+					for (int j = i + 1; j < localGroup.size(); j++) {
 						// find graph1 in graph0
-						StringGraph graph1 = graphs.get(j);
-						if (!repeatedGraphs.contains(graph1)) {
-							if (isGraphIsomorphicToKnowledgeBase(kb, graph1)) {
-								repeatedGraphs.add(graph1);
+						int index_j = localGroup.get(j).intValue();
+						StringGraph graph_j = graphs.get(index_j);
+						boolean duplicated_j = isomorphicGraphs.get(index_j);
+						if (!duplicated_j) {
+							StringGraph graphGeneralized = GraphAlgorithms.convertGraphToVariableGraph(graph_j);
+							ArrayList<Expr> query = JatalogInterface.createQueryFromStringGraphUniqueInstantiation(graphGeneralized);
+							boolean isIsomorphic = isGraphIsomorphicToKnowledgeBase(jatai, query);
+							if (isIsomorphic) {
+								isomorphicGraphs.set(index_j);
 							}
 						}
 					} // inner j for - variant graph1
+					jatai.clear();
 				}
-			});// i parallel for - variant knowledge base (graph0)
+			} // );// outer i for - variant knowledge base (graph0)
 		}
-		return repeatedGraphs;
 	}
 
-	private static boolean isGraphIsomorphicToKnowledgeBase(KnowledgeBase kb, StringGraph graph1) {
-		HashMap<String, String> conceptToVariable = createConceptToVariableMapping(graph1);
-		ArrayList<Conjunct> conjunctList = createConjunctionFromStringGraph(graph1, conceptToVariable);
-		Query q = Query.make(conjunctList);
-		int blockSize = 256;
-		int parallelLimit = 1;
-		BigInteger matches = kb.count(q, blockSize, parallelLimit, BigInteger.ONE, true, null);
-		// graph1 contained in graph0
-		boolean isIsomorphic = matches.compareTo(BigInteger.ZERO) > 0;
+	private static boolean isGraphIsomorphicToKnowledgeBase(JatalogInterface ji, ArrayList<Expr> query) throws DatalogException {
+		boolean isIsomorphic = ji.isQueryTrue(query);
 		return isIsomorphic;
 	}
 }
