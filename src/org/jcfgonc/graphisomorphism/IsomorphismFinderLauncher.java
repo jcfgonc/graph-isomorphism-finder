@@ -161,7 +161,7 @@ public class IsomorphismFinderLauncher {
 						boolean duplicated_j = isomorphicGraphs.get(index_j);
 						if (!duplicated_j) {
 							StringGraph graphGeneralized = GraphAlgorithms.convertGraphToVariableGraph(graph_j);
-							ArrayList<Expr> query = JatalogInterface.createQueryFromStringGraphUniqueInstantiation(graphGeneralized);
+							ArrayList<Expr> query = jatai.createQueryFromStringGraphUniqueInstantiation(graphGeneralized);
 							boolean isIsomorphic = isGraphIsomorphicToKnowledgeBase(jatai, query);
 							if (isIsomorphic) {
 								isomorphicGraphs.set(index_j);
